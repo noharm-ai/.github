@@ -84,8 +84,13 @@ jobs:
         id: pyproject-check
         continue-on-error: true
         run: |
-          violations=$(find . -name 'pyproject.toml' -not -path '*/node_modules/*' \
-            -exec grep -nE '(>=|<=|!=|~=|[~^])[0-9]' {} + || true)
+          violations=$(find . -name 'pyproject.toml' -not -path '*/node_modules/*' -print | \
+            while IFS= read -r f; do
+              awk '/^\[build-system\]/{skip=1;next} /^\[[^]]+\]/{skip=0} !skip' "$f" | \
+              grep -E '(>=|<=|!=|~=|[~^])[0-9]' | \
+              grep -v 'requires-python' | \
+              sed "s|^|$f: |"
+            done || true)
           if [ -n "$violations" ]; then
             echo "Found non-pinned dependency versions in pyproject.toml files:"
             echo "$violations"
