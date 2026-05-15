@@ -17,7 +17,7 @@ jobs:
         run: |
           violations=$(grep -nE '\b(npm |uv sync|uv run|pip install|yarn |pnpm )' Makefile \
             | grep -vE '^[0-9]+:[[:space:]]*#' \
-            | grep -vE '\bsfw ')
+            | grep -vE '\bsfw ' || true)
           if [ -n "$violations" ]; then
             echo "Found package manager calls not wrapped with sfw:"
             echo "$violations"
@@ -34,7 +34,7 @@ jobs:
             --exclude='security-check.yml' \
             --exclude='shared.yml' \
             | grep -vE ':[[:space:]]*#' \
-            | grep -vE '\bsfw ')
+            | grep -vE '\bsfw ' || true)
           if [ -n "$violations" ]; then
             echo "Found package manager calls not wrapped with sfw in workflow files:"
             echo "$violations"
@@ -49,7 +49,7 @@ jobs:
         run: |
           violations=$(grep -rnE '^\s+(- )?uses:\s+[^.]' .github/workflows/ \
             --exclude='shared.yml' \
-            | grep -vE '@[0-9a-f]{40}([[:space:]]|#|$)')
+            | grep -vE '@[0-9a-f]{40}([[:space:]]|#|$)' || true)
           if [ -n "$violations" ]; then
             echo "Found GitHub Actions not pinned to a full commit SHA:"
             echo "$violations"
@@ -63,7 +63,7 @@ jobs:
       - name: Verify all package.json dependencies use fixed versions
         run: |
           violations=$(find . -name package.json -not -path '*/node_modules/*' \
-            -exec grep -nE '"[^"]+": "([~^]|>=|>|<=|<|\*)' {} +)
+            -exec grep -nE '"[^"]+": "([~^]|>=|>|<=|<|\*)' {} + || true)
           if [ -n "$violations" ]; then
             echo "Found non-fixed dependency versions in package.json files:"
             echo "$violations"
@@ -78,7 +78,7 @@ jobs:
         run: |
           violations=$(find . -name 'requirements*.txt' -not -path '*/node_modules/*' \
             -exec grep -nE '^[a-zA-Z0-9]' {} + \
-            | grep -vE '==')
+            | grep -vE '==' || true)
           if [ -n "$violations" ]; then
             echo "Found non-pinned dependency versions in requirements.txt files:"
             echo "$violations"
@@ -92,7 +92,7 @@ jobs:
       - name: Verify all pyproject.toml dependencies use fixed versions
         run: |
           violations=$(find . -name 'pyproject.toml' -not -path '*/node_modules/*' \
-            -exec grep -nE '(>=|<=|!=|~=|[~^])[0-9]' {} +)
+            -exec grep -nE '(>=|<=|!=|~=|[~^])[0-9]' {} + || true)
           if [ -n "$violations" ]; then
             echo "Found non-pinned dependency versions in pyproject.toml files:"
             echo "$violations"
