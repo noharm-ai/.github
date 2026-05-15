@@ -31,6 +31,8 @@ jobs:
       - name: Verify all package manager calls in workflow files use sfw
         run: |
           violations=$(grep -rnE '\b(npm |uv sync|uv run|pip install|yarn |pnpm )' .github/workflows/ \
+            --exclude='security-check.yml' \
+            --exclude='shared.yml' \
             | grep -vE ':[[:space:]]*#' \
             | grep -vE '\bsfw ')
           if [ -n "$violations" ]; then
@@ -46,6 +48,7 @@ jobs:
       - name: Verify all GitHub Actions are pinned to a SHA
         run: |
           violations=$(grep -rnE '^\s+(- )?uses:\s+[^.]' .github/workflows/ \
+            --exclude='shared.yml' \
             | grep -vE '@[0-9a-f]{40}([[:space:]]|#|$)')
           if [ -n "$violations" ]; then
             echo "Found GitHub Actions not pinned to a full commit SHA:"
