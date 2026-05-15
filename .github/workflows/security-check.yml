@@ -9,11 +9,14 @@ permissions:
   contents: read
 
 jobs:
-  sfw-check:
+  security-checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
       - name: Verify all package manager calls in Makefile use sfw
+        id: sfw-check
+        continue-on-error: true
         run: |
           violations=$(grep -nE '\b(npm |uv sync|uv run|pip install|yarn |pnpm )' Makefile \
             | grep -vE '^[0-9]+:[[:space:]]*#' \
@@ -24,11 +27,9 @@ jobs:
             exit 1
           fi
 
-  sfw-check-workflows:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Verify all package manager calls in workflow files use sfw
+        id: sfw-check-workflows
+        continue-on-error: true
         run: |
           violations=$(grep -rnE '\b(npm |uv sync|uv run|pip install|yarn |pnpm )' .github/workflows/ \
             --exclude='security-check.yml' \
@@ -41,11 +42,9 @@ jobs:
             exit 1
           fi
 
-  sha-pin-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Verify all GitHub Actions are pinned to a SHA
+        id: sha-pin-check
+        continue-on-error: true
         run: |
           violations=$(grep -rnE '^\s+(- )?uses:\s+[^.]' .github/workflows/ \
             --exclude='shared.yml' \
@@ -56,11 +55,9 @@ jobs:
             exit 1
           fi
 
-  package-json-fixed-versions:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Verify all package.json dependencies use fixed versions
+        id: package-json-check
+        continue-on-error: true
         run: |
           violations=$(find . -name package.json -not -path '*/node_modules/*' \
             -exec grep -nE '"[^"]+": "([~^]|>=|>|<=|<|\*)' {} + || true)
@@ -70,11 +67,9 @@ jobs:
             exit 1
           fi
 
-  requirements-txt-fixed-versions:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Verify all requirements.txt dependencies use fixed versions
+        id: requirements-check
+        continue-on-error: true
         run: |
           violations=$(find . -name 'requirements*.txt' -not -path '*/node_modules/*' \
             -exec grep -nE '^[a-zA-Z0-9]' {} + \
@@ -85,11 +80,9 @@ jobs:
             exit 1
           fi
 
-  pyproject-toml-fixed-versions:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Verify all pyproject.toml dependencies use fixed versions
+        id: pyproject-check
+        continue-on-error: true
         run: |
           violations=$(find . -name 'pyproject.toml' -not -path '*/node_modules/*' \
             -exec grep -nE '(>=|<=|!=|~=|[~^])[0-9]' {} + || true)
@@ -98,3 +91,13 @@ jobs:
             echo "$violations"
             exit 1
           fi
+
+      - name: Fail if any check failed
+        if: |
+          steps.sfw-check.outcome == 'failure' ||
+          steps.sfw-check-workflows.outcome == 'failure' ||
+          steps.sha-pin-check.outcome == 'failure' ||
+          steps.package-json-check.outcome == 'failure' ||
+          steps.requirements-check.outcome == 'failure' ||
+          steps.pyproject-check.outcome == 'failure'
+        run: exit 1
