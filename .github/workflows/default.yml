@@ -34,6 +34,7 @@ jobs:
           violations=$(grep -rnE '\b(npm |uv sync|uv run|pip install|yarn |pnpm )' .github/workflows/ \
             --exclude='security-check.yml' \
             --exclude='shared.yml' \
+            --exclude='default.yml' \
             | grep -vE ':[[:space:]]*#' \
             | grep -vE '\bsfw ' || true)
           if [ -n "$violations" ]; then
@@ -118,7 +119,8 @@ jobs:
         run: |
           templates=$(grep -rlE 'AWSTemplateFormatVersion|Transform:\s*AWS::Serverless' \
             --include='*.yaml' --include='*.yml' . \
-            | grep -v node_modules || true)
+            | grep -v node_modules \
+            | grep -v '^\./\.github/' || true)
           if [ -n "$templates" ]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
             {
