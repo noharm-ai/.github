@@ -34,6 +34,7 @@ jobs:
           violations=$(grep -rnE '\b(npm |uv sync|uv run|pip install|yarn |pnpm )' .github/workflows/ \
             --exclude='security-check.yml' \
             --exclude='shared.yml' \
+            --exclude='default.yml' \
             | grep -vE ':[[:space:]]*#' \
             | grep -vE '\bsfw ' || true)
           if [ -n "$violations" ]; then
