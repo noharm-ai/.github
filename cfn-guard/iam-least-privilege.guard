@@ -12,7 +12,7 @@
 # policies em forma de string (managed policy names / SAM policy templates).
 #
 # Resource/Action podem ser string ou lista; intrinsics (!Sub, !GetAtt) viram
-# maps. Guardamos com `not (X is_struct)` antes de `X is_string` para evitar
+# maps. Guardamos com `X not is_struct` antes de `X is_string` para evitar
 # que cfn-guard tente resolver Fn::Sub (gerando W1031) ao avaliar o tipo.
 #
 
@@ -25,14 +25,14 @@ rule sam_inline_policies_least_privilege when %functions !empty {
       this.Statement[*] {
 
         when Resource exists
-             not (Resource is_struct)
+             Resource not is_struct
              Resource is_string {
           Resource != "*"
             <<Resource wildcard "*" proibido em policy IAM>>
         }
         when Resource exists Resource is_list {
           Resource[*] {
-            when not (this is_struct)
+            when this not is_struct
                  this is_string {
               this != "*"
                 <<Resource wildcard "*" proibido em policy IAM>>
@@ -41,14 +41,14 @@ rule sam_inline_policies_least_privilege when %functions !empty {
         }
 
         when Action exists
-             not (Action is_struct)
+             Action not is_struct
              Action is_string {
           Action != /\*/
             <<Action com wildcard "*" proibido em policy IAM>>
         }
         when Action exists Action is_list {
           Action[*] {
-            when not (this is_struct)
+            when this not is_struct
                  this is_string {
               this != /\*/
                 <<Action com wildcard "*" proibido em policy IAM>>
@@ -57,7 +57,7 @@ rule sam_inline_policies_least_privilege when %functions !empty {
         }
 
         when Action exists
-             not (Action is_struct)
+             Action not is_struct
              Action is_string
              Action == "iam:PassRole" {
           Condition exists
