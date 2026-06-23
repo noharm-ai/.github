@@ -106,3 +106,70 @@ jobs:
           steps.requirements-check.outcome == 'failure' ||
           steps.pyproject-check.outcome == 'failure'
         run: exit 1
+
+  iac-policy:
+    name: IaC policy (cfn-guard + cfn-lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Discover CloudFormation/SAM templates
+        id: discover
+        run: |
+          templates=$(grep -rlE 'AWSTemplateFormatVersion|Transform:\s*AWS::Serverless' \
+            --include='*.yaml' --include='*.yml' . \
+            | grep -v node_modules || true)
+          if [ -n "$templates" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "templates<<EOF"
+              echo "$templates"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "CloudFormation/SAM templates encontrados:"
+            echo "$templates"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "Nenhum template CloudFormation/SAM encontrado; pulando IaC policy."
+          fi
+
+      - name: Check out shared cfn-guard rules
+        if: steps.discover.outputs.found == 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: noharm-ai/.github
+          ref: main
+          path: .noharm-shared
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        if: steps.discover.outputs.found == 'true'
+        with:
+          python-version: "3.12"
+
+      - uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
+        if: steps.discover.outputs.found == 'true'
+        with:
+          mode: firewall-free
+
+      - name: Install cfn-lint
+        if: steps.discover.outputs.found == 'true'
+        run: sfw pip install "cfn-lint==1.51.5"
+
+      - name: Install cfn-guard
+        if: steps.discover.outputs.found == 'true'
+        run: |
+          curl -sSL https://github.com/aws-cloudformation/cloudformation-guard/releases/download/3.2.0/cfn-guard-v3-x86_64-ubuntu-latest.tar.gz -o cfn-guard.tar.gz
+          echo "9f8c4d9f15f7dd54a37ea70a5237ba00aba682fb1e6521a744d12259961dfc13  cfn-guard.tar.gz" | sha256sum -c -
+          tar -xzf cfn-guard.tar.gz
+          echo "$PWD/cfn-guard-v3-x86_64-ubuntu-latest" >> "$GITHUB_PATH"
+
+      - name: cfn-lint + cfn-guard (IAM least-privilege)
+        if: steps.discover.outputs.found == 'true'
+        run: |
+          while IFS= read -r template; do
+            [ -z "$template" ] && continue
+            echo "::group::Validando $template"
+            cfn-lint "$template"
+            cfn-guard validate --rules .noharm-shared/cfn-guard/iam-least-privilege.guard --data "$template"
+            echo "::endgroup::"
+          done <<< "${{ steps.discover.outputs.templates }}"
