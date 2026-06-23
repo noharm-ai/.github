@@ -12,8 +12,8 @@
 # policies em forma de string (managed policy names / SAM policy templates).
 #
 # Resource/Action podem ser string ou lista; intrinsics (!Sub, !GetAtt) viram
-# maps. Filtramos por `this is_string` para comparar apenas valores literais e
-# evitar erro de comparacao map-vs-string.
+# maps. Guardamos com `not (X is_struct)` antes de `X is_string` para evitar
+# que cfn-guard tente resolver Fn::Sub (gerando W1031) ao avaliar o tipo.
 #
 
 let functions = Resources.*[ Type == 'AWS::Serverless::Function' ]
@@ -24,25 +24,42 @@ rule sam_inline_policies_least_privilege when %functions !empty {
          this.Statement exists {
       this.Statement[*] {
 
-        when Resource exists Resource is_string {
+        when Resource exists
+             not (Resource is_struct)
+             Resource is_string {
           Resource != "*"
             <<Resource wildcard "*" proibido em policy IAM>>
         }
         when Resource exists Resource is_list {
-          Resource[ this is_string ] != "*"
-            <<Resource wildcard "*" proibido em policy IAM>>
+          Resource[*] {
+            when not (this is_struct)
+                 this is_string {
+              this != "*"
+                <<Resource wildcard "*" proibido em policy IAM>>
+            }
+          }
         }
 
-        when Action exists Action is_string {
+        when Action exists
+             not (Action is_struct)
+             Action is_string {
           Action != /\*/
             <<Action com wildcard "*" proibido em policy IAM>>
         }
         when Action exists Action is_list {
-          Action[ this is_string ] != /\*/
-            <<Action com wildcard "*" proibido em policy IAM>>
+          Action[*] {
+            when not (this is_struct)
+                 this is_string {
+              this != /\*/
+                <<Action com wildcard "*" proibido em policy IAM>>
+            }
+          }
         }
 
-        when Action exists Action is_string Action == "iam:PassRole" {
+        when Action exists
+             not (Action is_struct)
+             Action is_string
+             Action == "iam:PassRole" {
           Condition exists
             <<iam:PassRole exige um bloco Condition>>
         }
