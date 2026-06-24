@@ -18,6 +18,12 @@
 
 let functions = Resources.*[ Type == 'AWS::Serverless::Function' ]
 
+# Actions que o AWS obriga a usar Resource "*" (sem suporte a resource-level permissions)
+let approved_wildcard_only_actions = [
+  "ec2:DescribeSecurityGroups",
+  "ec2:DescribeSecurityGroupRules"
+]
+
 rule sam_inline_policies_least_privilege when %functions !empty {
   %functions.Properties.Policies[*] {
     when this is_struct
@@ -27,8 +33,21 @@ rule sam_inline_policies_least_privilege when %functions !empty {
         when Resource exists
              Resource not is_struct
              Resource is_string {
-          Resource != "*"
-            <<Resource wildcard "*" proibido em policy IAM>>
+          when Action not is_struct
+               Action is_string
+               Action not in %approved_wildcard_only_actions {
+            Resource != "*"
+              <<Resource wildcard "*" proibido em policy IAM>>
+          }
+          when Action is_list
+               some Action[*] not in %approved_wildcard_only_actions {
+            Resource != "*"
+              <<Resource wildcard "*" proibido em policy IAM>>
+          }
+          when Action is_struct {
+            Resource != "*"
+              <<Resource wildcard "*" proibido em policy IAM>>
+          }
         }
         when Resource exists Resource is_list {
           Resource[*] {
