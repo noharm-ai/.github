@@ -160,7 +160,10 @@ jobs:
       - name: Install cfn-guard
         if: steps.discover.outputs.found == 'true'
         run: |
-          curl -sSL https://github.com/aws-cloudformation/cloudformation-guard/releases/download/3.2.0/cfn-guard-v3-x86_64-ubuntu-latest.tar.gz -o cfn-guard.tar.gz
+          # -f: falha (exit != 0) em erro HTTP em vez de salvar a página de erro como
+          # se fosse o tarball; --retry: sobrevive a blips transitórios da CDN do GitHub
+          # (causa do sha256 FAILED — o asset e o hash pinado estão corretos/imutáveis).
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 https://github.com/aws-cloudformation/cloudformation-guard/releases/download/3.2.0/cfn-guard-v3-x86_64-ubuntu-latest.tar.gz -o cfn-guard.tar.gz
           echo "9f8c4d9f15f7dd54a37ea70a5237ba00aba682fb1e6521a744d12259961dfc13  cfn-guard.tar.gz" | sha256sum -c -
           tar -xzf cfn-guard.tar.gz
           echo "$PWD/cfn-guard-v3-x86_64-ubuntu-latest" >> "$GITHUB_PATH"
