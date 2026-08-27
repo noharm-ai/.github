@@ -4,6 +4,15 @@ on:
   pull_request:
     branches: [main, master, develop]
   workflow_call:
+    inputs:
+      secret_scan_blocking:
+        description: "Falha o PR quando o gitleaks encontra um segredo real"
+        type: boolean
+        default: true
+      sensitive_data_blocking:
+        description: "Falha o PR quando ha dado sensivel de infra ou PII (CPF/CNPJ/CNS)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -108,9 +117,154 @@ jobs:
           steps.pyproject-check.outcome == 'failure'
         run: exit 1
 
+  secret-scan:
+    name: Secret & sensitive data scan
+    runs-on: ubuntu-latest
+    env:
+      # `inputs` fica vazio quando este workflow roda pelo proprio `pull_request`
+      # (os defaults de workflow_call so valem quando ele e CHAMADO). Comparar
+      # null com false da igual nas expressoes do GitHub, entao usamos toJSON
+      # para distinguir "nao informado" de "informado como false".
+      SECRETS_BLOCKING: ${{ toJSON(inputs.secret_scan_blocking) == 'false' && 'false' || 'true' }}
+      SENSITIVE_BLOCKING: ${{ toJSON(inputs.sensitive_data_blocking) == 'true' && 'true' || 'false' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Check out shared security rules
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: noharm-ai/.github
+          ref: main
+          path: .noharm-shared
+
+      # Quando o workflow roda no proprio noharm-ai/.github, usa as regras da
+      # branch do PR — senao um PR que altera as regras seria validado contra a
+      # versao antiga em `main` (e o PR que as INTRODUZ nem teria arquivo).
+      # Nos repositorios consumidores cai sempre em .noharm-shared.
+      #
+      # O discriminante e a IDENTIDADE do repositorio, nao a existencia de
+      # `security/gitleaks.toml`: um repo consumidor que tenha um arquivo com
+      # esse nome cairia em `dir=security`, os outros arquivos de regra nao
+      # existiriam ali, e — como os steps de infra/PII sao continue-on-error —
+      # o job ficaria verde com dois dos tres scanners desligados.
+      - name: Resolve rules directory
+        id: rules
+        env:
+          IS_SHARED_REPO: ${{ github.repository == 'noharm-ai/.github' }}
+        run: |
+          if [ "$IS_SHARED_REPO" = "true" ]; then
+            dir="security"
+          else
+            dir=".noharm-shared/security"
+          fi
+          # Falta de arquivo e erro duro: em modo aviso um scanner ausente e
+          # indistinguivel de um scanner que nao achou nada.
+          missing=""
+          for f in gitleaks.toml gitleaks-infra.toml gitleaks-annotate.py pii-scan.py allowlist.txt; do
+            if [ ! -f "$dir/$f" ]; then missing="$missing $f"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Regras compartilhadas ausentes em $dir:$missing"
+            exit 1
+          fi
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          echo "Usando regras de: $dir"
+
+      - name: Show effective enforcement mode
+        run: |
+          echo "secret_scan_blocking    = $SECRETS_BLOCKING"
+          echo "sensitive_data_blocking = $SENSITIVE_BLOCKING"
+
+      - name: Install gitleaks
+        run: |
+          # Instala em RUNNER_TEMP, fora do workspace: se o binario ficasse na
+          # arvore, o proprio `gitleaks dir .` iria varrer os 12 MB dele.
+          # O tarball do gitleaks extrai o binario na raiz (diferente do
+          # cfn-guard, que cria um subdiretorio versionado).
+          # -f/--retry pelo mesmo motivo do cfn-guard: sem -f uma pagina de erro HTTP
+          # e salva como se fosse o tarball e o sintoma vira um `sha256 FAILED`
+          # confuso; sem --retry um blip da CDN derruba o job.
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            -o "$RUNNER_TEMP/gitleaks.tar.gz"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/gitleaks-bin"
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP/gitleaks-bin"
+          echo "$RUNNER_TEMP/gitleaks-bin" >> "$GITHUB_PATH"
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      # Escopo working-tree (`dir`), nao historico: o checkout padrao usa
+      # fetch-depth 1, e varrer o historico deixaria vermelho todo PR de repo
+      # que ja tenha um segredo antigo commitado.
+      - name: Scan for secrets (gitleaks)
+        id: gitleaks-secrets
+        continue-on-error: true
+        run: |
+          gitleaks dir . \
+            --config ${{ steps.rules.outputs.dir }}/gitleaks.toml \
+            --no-banner --redact --exit-code 1
+
+      # O gitleaks nao emite anotacoes do GitHub. Em modo aviso o job fica
+      # verde, e ninguem abre log de job verde — entao convertemos o JSON em
+      # `::warning file=,line=` para o achado aparecer na aba Files do PR.
+      - name: Scan for sensitive infrastructure data (gitleaks)
+        id: gitleaks-infra
+        continue-on-error: true
+        run: |
+          set +e
+          gitleaks dir . \
+            --config ${{ steps.rules.outputs.dir }}/gitleaks-infra.toml \
+            --no-banner --redact --exit-code 1 \
+            --report-format json --report-path "$RUNNER_TEMP/infra.json"
+          rc=$?
+          python ${{ steps.rules.outputs.dir }}/gitleaks-annotate.py \
+            "$RUNNER_TEMP/infra.json" --level warning --prefix "$PWD"
+          exit $rc
+
+      - name: Scan for Brazilian PII (CPF/CNPJ/CNS)
+        id: pii-scan
+        continue-on-error: true
+        run: |
+          args=""
+          if [ "$SENSITIVE_BLOCKING" = "true" ]; then args="--blocking"; fi
+          python ${{ steps.rules.outputs.dir }}/pii-scan.py . $args \
+            --allowlist ${{ steps.rules.outputs.dir }}/allowlist.txt
+
+      - name: Fail if any check failed
+        env:
+          SECRETS_OUTCOME: ${{ steps.gitleaks-secrets.outcome }}
+          INFRA_OUTCOME: ${{ steps.gitleaks-infra.outcome }}
+          PII_OUTCOME: ${{ steps.pii-scan.outcome }}
+        run: |
+          # `if/then` explicito: o shell padrao da Action e `bash -e`, e a forma
+          # `[ cond ] && var=1` aborta o step quando a condicao e falsa.
+          fail=0
+          if [ "$SECRETS_OUTCOME" = "failure" ]; then
+            echo "Segredos encontrados (gitleaks)."
+            if [ "$SECRETS_BLOCKING" = "true" ]; then fail=1; fi
+          fi
+          if [ "$INFRA_OUTCOME" = "failure" ]; then
+            echo "Dados sensiveis de infraestrutura encontrados."
+            if [ "$SENSITIVE_BLOCKING" = "true" ]; then fail=1; fi
+          fi
+          if [ "$PII_OUTCOME" = "failure" ]; then
+            echo "PII (CPF/CNPJ/CNS) encontrada."
+            if [ "$SENSITIVE_BLOCKING" = "true" ]; then fail=1; fi
+          fi
+          if [ "$fail" = "1" ]; then
+            echo "Corrija os achados acima ou justifique a supressao na linha."
+            exit 1
+          fi
+          echo "Nenhum achado bloqueante."
+
   iac-policy:
     name: IaC policy (cfn-guard + cfn-lint)
     runs-on: ubuntu-latest
+    env:
+      SENSITIVE_BLOCKING: ${{ toJSON(inputs.sensitive_data_blocking) == 'true' && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -168,13 +322,76 @@ jobs:
           tar -xzf cfn-guard.tar.gz
           echo "$PWD/cfn-guard-v3-x86_64-ubuntu-latest" >> "$GITHUB_PATH"
 
-      - name: cfn-lint + cfn-guard (IAM least-privilege)
+      # Mesmo criterio do job secret-scan: identidade do repositorio, nao
+      # existencia de arquivo (ver comentario la).
+      - name: Resolve rules directory
+        id: rules
         if: steps.discover.outputs.found == 'true'
+        env:
+          IS_SHARED_REPO: ${{ github.repository == 'noharm-ai/.github' }}
+        run: |
+          if [ "$IS_SHARED_REPO" = "true" ]; then
+            dir="cfn-guard"
+          else
+            dir=".noharm-shared/cfn-guard"
+          fi
+          missing=""
+          for f in iam-least-privilege.guard no-sensitive-data.guard; do
+            if [ ! -f "$dir/$f" ]; then missing="$missing $f"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Regras cfn-guard ausentes em $dir:$missing"
+            exit 1
+          fi
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          echo "Usando regras de: $dir"
+
+      # A lista de templates entra por env, nao por ${{ }} inline no script:
+      # os nomes de arquivo vem do PR, e a interpolacao inline permitiria
+      # injetar shell pelo nome do template.
+      - name: cfn-lint + cfn-guard (IAM least-privilege)
+        id: iac-blocking
+        if: steps.discover.outputs.found == 'true'
+        env:
+          TEMPLATES: ${{ steps.discover.outputs.templates }}
+          RULES_DIR: ${{ steps.rules.outputs.dir }}
         run: |
           while IFS= read -r template; do
             [ -z "$template" ] && continue
             echo "::group::Validando $template"
             cfn-lint "$template"
-            cfn-guard validate --rules .noharm-shared/cfn-guard/iam-least-privilege.guard --data "$template"
+            cfn-guard validate --rules "$RULES_DIR/iam-least-privilege.guard" --data "$template"
             echo "::endgroup::"
-          done <<< "${{ steps.discover.outputs.templates }}"
+          done <<< "$TEMPLATES"
+
+      # Mesma politica do job secret-scan: dado sensivel avisa, nao bloqueia,
+      # ate os templates existentes trocarem os IDs de rede por Parameters.
+      - name: cfn-guard (dados sensiveis no template)
+        id: iac-sensitive
+        if: steps.discover.outputs.found == 'true'
+        continue-on-error: true
+        env:
+          TEMPLATES: ${{ steps.discover.outputs.templates }}
+          RULES_DIR: ${{ steps.rules.outputs.dir }}
+        run: |
+          failed=0
+          while IFS= read -r template; do
+            [ -z "$template" ] && continue
+            echo "::group::Dados sensiveis em $template"
+            cfn-guard validate --rules "$RULES_DIR/no-sensitive-data.guard" --data "$template" || failed=1
+            echo "::endgroup::"
+          done <<< "$TEMPLATES"
+          if [ "$failed" = "1" ]; then
+            echo "::warning::Dados sensiveis hardcoded encontrados em template CloudFormation/SAM."
+            exit 1
+          fi
+
+      - name: Fail if sensitive data is blocking
+        if: steps.discover.outputs.found == 'true'
+        env:
+          SENSITIVE_OUTCOME: ${{ steps.iac-sensitive.outcome }}
+        run: |
+          if [ "$SENSITIVE_OUTCOME" = "failure" ] && [ "$SENSITIVE_BLOCKING" = "true" ]; then
+            exit 1
+          fi
+          echo "Nenhum achado bloqueante de dado sensivel em template."

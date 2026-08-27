@@ -11,6 +11,12 @@
 # apenas quando o item e um documento de policy (struct com Statement), ignorando
 # policies em forma de string (managed policy names / SAM policy templates).
 #
+# O `when Policies exists` e obrigatorio: sem esse guarda, uma funcao sem
+# Policies inline (que usa `Role` ou a role default do SAM) quebra com
+# RequiredPropertyError em vez de ser ignorada. E NAO adiantam predicados de
+# tipo aqui: `Policies` aceita tanto lista quanto map unico, e exigir
+# `is_list` faria a regra pular silenciosamente a forma de map.
+#
 # Resource/Action podem ser string ou lista; intrinsics (!Sub, !GetAtt) viram
 # maps. Guardamos com `X not is_struct` antes de `X is_string` para evitar
 # que cfn-guard tente resolver Fn::Sub (gerando W1031) ao avaliar o tipo.
@@ -25,66 +31,70 @@ let approved_wildcard_only_actions = [
 ]
 
 rule sam_inline_policies_least_privilege when %functions !empty {
-  %functions.Properties.Policies[*] {
-    when this is_struct
-         this.Statement exists {
-      this.Statement[*] {
+  %functions.Properties {
+    when Policies exists {
+      Policies[*] {
+        when this is_struct
+             this.Statement exists {
+          this.Statement[*] {
 
-        when Resource exists
-             Resource not is_struct
-             Resource is_string {
-          when Action not is_struct
-               Action is_string
-               Action not in %approved_wildcard_only_actions {
-            Resource != "*"
-              <<Resource wildcard "*" proibido em policy IAM>>
-          }
-          when Action is_list
-               some Action[*] not in %approved_wildcard_only_actions {
-            Resource != "*"
-              <<Resource wildcard "*" proibido em policy IAM>>
-          }
-          when Action is_struct {
-            Resource != "*"
-              <<Resource wildcard "*" proibido em policy IAM>>
-          }
-        }
-        when Resource exists Resource is_list {
-          Resource[*] {
-            when this not is_struct
-                 this is_string {
-              this != "*"
-                <<Resource wildcard "*" proibido em policy IAM>>
+            when Resource exists
+                 Resource not is_struct
+                 Resource is_string {
+              when Action not is_struct
+                   Action is_string
+                   Action not in %approved_wildcard_only_actions {
+                Resource != "*"
+                  <<Resource wildcard "*" proibido em policy IAM>>
+              }
+              when Action is_list
+                   some Action[*] not in %approved_wildcard_only_actions {
+                Resource != "*"
+                  <<Resource wildcard "*" proibido em policy IAM>>
+              }
+              when Action is_struct {
+                Resource != "*"
+                  <<Resource wildcard "*" proibido em policy IAM>>
+              }
             }
-          }
-        }
+            when Resource exists Resource is_list {
+              Resource[*] {
+                when this not is_struct
+                     this is_string {
+                  this != "*"
+                    <<Resource wildcard "*" proibido em policy IAM>>
+                }
+              }
+            }
 
-        when Action exists
-             Action not is_struct
-             Action is_string {
-          Action != /\*/
-            <<Action com wildcard "*" proibido em policy IAM>>
-        }
-        when Action exists Action is_list {
-          Action[*] {
-            when this not is_struct
-                 this is_string {
-              this != /\*/
+            when Action exists
+                 Action not is_struct
+                 Action is_string {
+              Action != /\*/
                 <<Action com wildcard "*" proibido em policy IAM>>
             }
-          }
-        }
+            when Action exists Action is_list {
+              Action[*] {
+                when this not is_struct
+                     this is_string {
+                  this != /\*/
+                    <<Action com wildcard "*" proibido em policy IAM>>
+                }
+              }
+            }
 
-        when Action exists
-             Action not is_struct
-             Action is_string
-             Action == "iam:PassRole" {
-          Condition exists
-            <<iam:PassRole exige um bloco Condition>>
-        }
-        when Action exists Action is_list some Action[*] == "iam:PassRole" {
-          Condition exists
-            <<iam:PassRole exige um bloco Condition>>
+            when Action exists
+                 Action not is_struct
+                 Action is_string
+                 Action == "iam:PassRole" {
+              Condition exists
+                <<iam:PassRole exige um bloco Condition>>
+            }
+            when Action exists Action is_list some Action[*] == "iam:PassRole" {
+              Condition exists
+                <<iam:PassRole exige um bloco Condition>>
+            }
+          }
         }
       }
     }

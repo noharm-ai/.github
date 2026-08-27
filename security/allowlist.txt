@@ -1,0 +1,16 @@
+# Allowlist compartilhada do pii-scan.py.
+#
+# Um valor por linha; `#` inicia comentario. A comparacao ignora pontuacao —
+# "36.655.012/0001-00" e "36655012000100" sao equivalentes.
+#
+# Use apenas para dados que sao legitimamente publicos. Para uma ocorrencia
+# pontual, prefira o comentario `noharm:allow-pii` na propria linha.
+
+# CNPJ publico da NoHarm, exibido no rodape do site institucional
+# (website/locales/pt.json, website/locales/es.json)
+36.655.012/0001-00
+
+# CPF sequencial usado como fixture de teste em backend e planifica-pec.
+# Passa no digito verificador por coincidencia, mas nao corresponde a
+# nenhuma pessoa real — e a sequencia 9-8-7-6-5-4-3-2-1-0-0.
+987.654.321-00
