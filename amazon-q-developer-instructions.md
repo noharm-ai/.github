@@ -25,4 +25,37 @@ como erro (blocking) qualquer violação encontrada.
 - Workflows que instalam pacotes Python devem usar `sfw pip install`
   em vez de `pip install` direto
 - A action `SocketDev/action` deve estar presente antes do step de instalação
-```
+
+## Vazamento de Segredos e Dados Sensiveis
+
+A CI compartilhada ja roda gitleaks e o `pii-scan.py`, mas o scanner so pega
+o que tem forma reconhecivel. No review, sinalize tambem:
+
+### 5. Segredos em texto plano
+- Senha, token, chave privada ou connection string com credencial embutida
+- Senha fraca nao e detectada por entropia (ex: `"changeme123"`) — sinalize na
+  leitura
+- O valor correto vem de variavel de ambiente, SSM ou Secrets Manager
+
+### 6. Detalhes de infraestrutura hardcoded
+- IP publico, endpoint de RDS/Aurora/ElastiCache/OpenSearch/ELB, account ID da AWS
+- IDs de rede (`vpc-`, `subnet-`, `sg-`) em codigo ou em `template.yaml`
+- Devem ser `Parameter`/`Ref`/`${AWS::AccountId}`, nunca literal — o literal
+  expoe a topologia da conta e prende o template a um ambiente so
+
+### 7. PII brasileira
+- CPF, CNPJ ou CNS validos em codigo, teste ou fixture
+- Telefone que parece real (DDD valido + prefixo coerente), inclusive em
+  docstring, README e fixture de teste
+- Contexto de saude: dado de paciente e o ativo mais sensivel da NoHarm
+- Fixture de teste deve usar numero **invalido** no digito verificador
+  (ex: `111.222.333-44`), nunca um CPF que passe na validacao
+- Para telefone, o equivalente e o placeholder: `(51) 99999-9999`,
+  `(51) 3333-4444` — nunca um numero que poderia tocar em alguem
+
+### 8. Supressoes
+- `gitleaks:allow`, `noharm:allow-pii` (linha) e `noharm:allow-pii-file`
+  (arquivo inteiro) silenciam o scanner
+- Toda supressao nova precisa de justificativa no proprio comentario;
+  supressao sem explicacao deve ser questionada no review
+

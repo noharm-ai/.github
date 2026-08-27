@@ -1,0 +1,52 @@
+# Gitleaks — regras de SEGREDOS (camada bloqueante).
+#
+# Usa o ruleset padrao do gitleaks (chaves AWS/GCP/Stripe/GitHub, private keys,
+# tokens de provedores, etc). As regras de dados sensiveis de infraestrutura
+# ficam em gitleaks-infra.toml, que roda em modo aviso.
+#
+# Escape hatch por linha: `gitleaks:allow`
+#
+# ATENCAO: `paths` aqui sao REGEX aplicadas ao caminho do arquivo — nao sao
+# globs nem `--exclude-dir` de shell.
+
+title = "NoHarm — segredos"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Caminhos vendored/build/lock e o proprio checkout das regras compartilhadas"
+paths = [
+  '''(^|/)\.git/''',
+  '''(^|/)\.noharm-shared/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)site-packages/''',
+  '''(^|/)dist-info/''',
+  '''(^|/)__pycache__/''',
+  '''(^|/)vendor/''',
+  '''(^|/)(\.venv|venv|env)/''',
+  '''(^|/)(dist|build|out|coverage)/''',
+  '''\.min\.(js|css)$''',
+  '''(^|/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|poetry\.lock|uv\.lock|Pipfile\.lock|composer\.lock)$''',
+  '''\.(png|jpe?g|gif|svg|ico|pdf|woff2?|ttf|eot|zip|gz|tar|whl|so|dylib|map)$''',
+]
+
+# Falsos positivos confirmados na varredura dos 14 repositorios consumidores.
+# Todos eram do `generic-api-key`/`curl-auth-header`, que casam por entropia e
+# nao por formato de provedor.
+regexes = [
+  # atalhos de teclado em config de TUI (ex.: keys = "ctrl+shift+end")
+  '''(?i)^(ctrl|cmd|alt|shift|meta|super)\+''',
+  # fragmento de atribuicao de shell capturado como "segredo" (ex.: _nifi_pass_result=)
+  '''^[A-Za-z_][A-Za-z0-9_]*=$''',
+]
+
+stopwords = [
+  "dev-token",
+  "changeme",
+  "placeholder",
+  "your-token",
+  "your_token",
+  "notarealsecret",
+  "redacted",
+]

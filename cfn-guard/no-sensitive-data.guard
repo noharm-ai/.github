@@ -1,0 +1,150 @@
+#
+# Policy-as-code (shift-left) para dados sensiveis hardcoded em templates
+# CloudFormation/SAM.
+#
+# Complementa (nao substitui) o security/gitleaks-infra.toml: aqui ficam as
+# verificacoes ESTRUTURAIS, que um scanner de texto le mal. O exemplo mais
+# claro e senha em texto plano — "changeme123" nao tem entropia suficiente
+# para o gitleaks, mas e um vazamento igual.
+#
+# Bloqueia o PR quando o template introduz:
+#   - Senha de banco como string literal (deve ser Ref/Sub/resolve:secretsmanager)
+#   - CidrIp com IP publico hardcoded em ingress de Security Group
+#   - SubnetIds / SecurityGroupIds literais na VpcConfig de funcao SAM
+#   - Account ID de 12 digitos hardcoded em ARN (use ${AWS::AccountId})
+#
+# Fora de escopo aqui, de proposito:
+#   - `VpcId` (e qualquer `vpc-`/`subnet-`/`sg-` solto no template) ja e coberto
+#     pela regra `noharm-vpc-resource-id` do security/gitleaks-infra.toml, que
+#     varre o template como texto. Duplicar aqui so geraria dois avisos na
+#     mesma linha, em dois jobs diferentes.
+#   - `CidrIpv6` e os recursos AVULSOS `AWS::EC2::SecurityGroupIngress`/`Egress`
+#     (a regra 2 so le o ingress/egress INLINE no AWS::EC2::SecurityGroup).
+#     Sao lacunas conhecidas: um ingress declarado como recurso proprio passa.
+#
+# Convencao herdada de iam-least-privilege.guard: sempre guardamos com
+# `X not is_struct` antes de `X is_string`, para evitar que o cfn-guard tente
+# resolver Fn::Sub/Fn::GetAtt ao avaliar o tipo (gera W1031). Quando o valor e
+# um intrinsic ele vira um map (is_struct) — e justamente esse o caso correto.
+#
+
+let db_resources = Resources.*[
+  Type in [ 'AWS::RDS::DBInstance', 'AWS::RDS::DBCluster' ]
+]
+
+let security_groups = Resources.*[ Type == 'AWS::EC2::SecurityGroup' ]
+
+let functions = Resources.*[ Type == 'AWS::Serverless::Function' ]
+
+#
+# 1. Senha de banco em texto plano.
+#    Um literal string aqui e sempre vazamento; o valor correto e um intrinsic
+#    (Ref para Parameter NoEcho, ou {{resolve:secretsmanager:...}} via Fn::Sub).
+#
+rule db_sem_senha_em_texto_plano when %db_resources !empty {
+  %db_resources.Properties {
+    when MasterUserPassword exists
+         MasterUserPassword not is_struct
+         MasterUserPassword is_string {
+      MasterUserPassword == /^\{\{resolve:secretsmanager:/
+        <<Senha de banco em texto plano no template; use Parameter NoEcho ou {{resolve:secretsmanager:...}}>>
+    }
+  }
+}
+
+#
+# 2. IP publico hardcoded em ingress de Security Group.
+#    Faixas RFC1918 sao permitidas (topologia interna, nao vazamento).
+#    0.0.0.0/0 tambem passa aqui: e um problema de exposicao, nao de vazamento
+#    de dado sensivel, e ja e coberto por outras revisoes.
+#
+rule sg_sem_ip_publico_hardcoded when %security_groups !empty {
+  %security_groups.Properties {
+    when SecurityGroupIngress exists SecurityGroupIngress is_list {
+      SecurityGroupIngress[*] {
+        when CidrIp exists
+             CidrIp not is_struct
+             CidrIp is_string {
+          CidrIp == /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.|169\.254\.|0\.0\.0\.0\/0$)/
+            <<CidrIp com IP publico hardcoded; use um Parameter em vez do literal>>
+        }
+      }
+    }
+    when SecurityGroupEgress exists SecurityGroupEgress is_list {
+      SecurityGroupEgress[*] {
+        when CidrIp exists
+             CidrIp not is_struct
+             CidrIp is_string {
+          CidrIp == /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.|169\.254\.|0\.0\.0\.0\/0$)/
+            <<CidrIp com IP publico hardcoded; use um Parameter em vez do literal>>
+        }
+      }
+    }
+  }
+}
+
+#
+# 3. Identificadores de rede hardcoded na VpcConfig das funcoes SAM.
+#    vpc-/subnet-/sg- expoem a topologia da conta e travam o template em um
+#    ambiente so; devem vir de Parameter/Ref.
+#
+rule funcao_sem_ids_de_rede_hardcoded when %functions !empty {
+  %functions.Properties {
+    when VpcConfig exists
+         VpcConfig is_struct {
+      VpcConfig {
+        when SubnetIds exists SubnetIds is_list {
+          SubnetIds[*] {
+            when this not is_struct
+                 this is_string {
+              this != /^subnet-[0-9a-f]{8,17}$/
+                <<SubnetId hardcoded; use um Parameter em vez do literal>>
+            }
+          }
+        }
+        when SecurityGroupIds exists SecurityGroupIds is_list {
+          SecurityGroupIds[*] {
+            when this not is_struct
+                 this is_string {
+              this != /^sg-[0-9a-f]{8,17}$/
+                <<SecurityGroupId hardcoded; use um Parameter em vez do literal>>
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+#
+# 4. Account ID hardcoded nos ARNs das policies inline das funcoes SAM.
+#    O caminho inspecionado e o mesmo de iam-least-privilege.guard.
+#
+rule policies_sem_account_id_hardcoded when %functions !empty {
+  %functions.Properties {
+    when Policies exists {
+      Policies[*] {
+        when this is_struct
+             this.Statement exists {
+          this.Statement[*] {
+            when Resource exists
+                 Resource not is_struct
+                 Resource is_string {
+              Resource != /arn:aws[a-z\-]*:[a-z0-9\-]*:[a-z0-9\-]*:[0-9]{12}:/
+                <<Account ID hardcoded no ARN; use ${AWS::AccountId}>>
+            }
+            when Resource exists Resource is_list {
+              Resource[*] {
+                when this not is_struct
+                     this is_string {
+                  this != /arn:aws[a-z\-]*:[a-z0-9\-]*:[a-z0-9\-]*:[0-9]{12}:/
+                    <<Account ID hardcoded no ARN; use ${AWS::AccountId}>>
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

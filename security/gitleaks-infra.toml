@@ -1,0 +1,142 @@
+# Gitleaks — regras de DADOS SENSIVEIS DE INFRAESTRUTURA (camada de aviso).
+#
+# Ruleset proprio (useDefault = false); os segredos ficam em gitleaks.toml.
+# Alvo: detalhes de infra que nao devem estar hardcoded no codigo — devem vir
+# de SSM/Secrets Manager/parametros/variaveis de ambiente.
+#
+# Escape hatch por linha: `gitleaks:allow`
+#
+# Decisoes de escopo medidas contra os 14 repos consumidores (0 falsos
+# positivos com estas exclusoes):
+#   - Nao existe regra para `.internal` / `.local` soltos: casam com
+#     identificadores JS (`config.internal`) e com `.env.local` no .gitignore.
+#   - Account ID so e reportado dentro de contexto de ARN, nunca como uma
+#     sequencia solta de 12 digitos.
+#   - Faixas de documentacao (RFC5737) e resolvers publicos ficam de fora: os
+#     testes do backend usam 203.0.113.x / 198.51.100.x / 8.8.8.8 de proposito.
+#
+# ATENCAO: `paths` sao REGEX aplicadas ao caminho do arquivo.
+
+title = "NoHarm — dados sensiveis de infraestrutura"
+
+[extend]
+useDefault = false
+
+[allowlist]
+description = "Caminhos vendored/build/lock e o proprio checkout das regras compartilhadas"
+paths = [
+  '''(^|/)\.git/''',
+  '''(^|/)\.noharm-shared/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)site-packages/''',
+  '''(^|/)dist-info/''',
+  '''(^|/)__pycache__/''',
+  '''(^|/)vendor/''',
+  '''(^|/)(\.venv|venv|env)/''',
+  '''(^|/)(dist|build|out|coverage)/''',
+  '''\.min\.(js|css)$''',
+  '''(^|/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|poetry\.lock|uv\.lock|Pipfile\.lock|composer\.lock)$''',
+  '''\.(png|jpe?g|gif|svg|ico|pdf|woff2?|ttf|eot|zip|gz|tar|whl|so|dylib|map)$''',
+]
+
+# ---------------------------------------------------------------------------
+# IP publico hardcoded
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "noharm-public-ip"
+description = "Endereco IPv4 publico hardcoded — use parametro/SSM em vez de literal"
+# O prefixo/sufixo `[^0-9A-Za-z.]` e obrigatorio: sem ele o regex casa DENTRO de
+# strings de versao como "instantclient-21.13.0.0.0" (o trecho "13.0.0.0").
+# RE2 nao tem lookahead, entao o contexto entra no match e o IP fica no grupo 1.
+regex = '''(?:^|[^0-9A-Za-z.])((?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9]))(?:$|[^0-9A-Za-z.])'''
+secretGroup = 1
+tags = ["infra", "ip"]
+
+  [[rules.allowlists]]
+  description = "Faixas privadas/reservadas, faixas de documentacao e resolvers publicos"
+  regexes = [
+    # RFC1918 privado
+    '''^10\.''',
+    '''^192\.168\.''',
+    '''^172\.(1[6-9]|2[0-9]|3[01])\.''',
+    # loopback, link-local, CGNAT, unspecified, broadcast
+    '''^127\.''',
+    '''^169\.254\.''',
+    '''^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.''',
+    '''^0\.''',
+    '''^255\.''',
+    # multicast / reservado (224.0.0.0/4 e 240.0.0.0/4)
+    '''^(22[4-9]|23[0-9]|24[0-9]|25[0-5])\.''',
+    # RFC5737 — faixas de documentacao usadas em testes
+    '''^192\.0\.2\.''',
+    '''^198\.51\.100\.''',
+    '''^203\.0\.113\.''',
+    # RFC2544 — benchmarking
+    '''^198\.(1[89])\.''',
+    # resolvers publicos e exemplos canonicos de documentacao
+    '''^(8\.8\.8\.8|8\.8\.4\.4|1\.1\.1\.1|1\.0\.0\.1|9\.9\.9\.9)$''',
+    '''^(1\.2\.3\.4|4\.3\.2\.1|5\.6\.7\.8|123\.123\.123\.123)$''',
+  ]
+
+  [[rules.allowlists]]
+  description = "Contextos que se parecem com IP mas nao sao"
+  regexTarget = "line"
+  regexes = [
+    # dados de path de SVG: d="m2.64,2.97h-.3s-.1.02-.13.05..."
+    '''(?i)(<path|<svg|viewbox=|\bd="[mMlLcCzZhHvV])''',
+    # numeros de versao e OIDs
+    '''(?i)(version|versao|__version__|release|changelog|semver|instantclient|v\.[0-9])''',
+    # versoes dentro de URLs de artefato (maven, oracle, releases)
+    '''(?i)(maven|/artifact/|download\.|\.jar\b|\.zip\b|\.tar\.gz\b|ojdbc)''',
+    # cabecalhos de proxy em teste usam IPs de exemplo da documentacao (MDN)
+    '''(?i)(x-forwarded-for|x-real-ip|cf-connecting-ip|remote_addr)''',
+    '''(?i)objectidentifier|\boid\b''',
+    # mascaras de rede e mensagens de exemplo/validacao
+    '''(?i)(netmask|subnet_mask|prefix_len)''',
+    '''(?i)(\bex:|\bex\.|exemplo|example|placeholder|inv[aá]lido|invalid)''',
+  ]
+
+# ---------------------------------------------------------------------------
+# Endpoints de servicos AWS
+# ---------------------------------------------------------------------------
+# Uma regra so para os quatro servicos: o numero de labels entre o nome do
+# recurso e o sufixo do servico varia demais para fixar o formato da regiao.
+# Os `<>` nos exemplos abaixo nao sao decorativos: sem eles estes hostnames
+# casariam com a propria regra e o gitleaks reportaria achados neste arquivo.
+#   RDS instancia   <nome>.<hash>.<regiao>.rds.amazonaws.com               (1 label)
+#   Aurora          <nome>.cluster-<hash>.<regiao>.rds.amazonaws.com       (2)
+#   OpenSearch      search-<dominio>-<hash>.<regiao>.es.amazonaws.com      (1)
+#   ElastiCache     <nome>.<hash>.ng.0001.<regiao>.cache.amazonaws.com     (4)
+#   ELB/ALB/NLB     <nome>-<hash>.<regiao>.elb.amazonaws.com               (1)
+# `(?i)`: hostname e case-insensitive e aparece capitalizado em configs.
+[[rules]]
+id = "noharm-aws-endpoint"
+description = "Endpoint AWS hardcoded (RDS/Aurora/ElastiCache/OpenSearch/ELB) — deve vir de SSM ou parametro"
+regex = '''(?i)\b[a-z0-9][a-z0-9\-]*(?:\.[a-z0-9\-]+){1,4}\.(?:rds|cache|es|elb)\.amazonaws\.com\b'''
+tags = ["infra", "aws", "dns"]
+
+# ---------------------------------------------------------------------------
+# Account ID da AWS (somente dentro de ARN)
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "noharm-aws-account-id"
+description = "Account ID da AWS hardcoded em ARN — use ${AWS::AccountId} ou parametro"
+regex = '''arn:aws[a-z\-]*:[a-z0-9\-]*:[a-z0-9\-]*:([0-9]{12}):'''
+secretGroup = 1
+tags = ["infra", "aws", "account-id"]
+
+  [[rules.allowlists]]
+  description = "Account ID zerado (placeholder comum em documentacao)"
+  regexes = [
+    '''^0{12}$''',
+    '''^(012345678901|123456789012)$''',
+  ]
+
+# ---------------------------------------------------------------------------
+# Identificadores de recursos de rede da VPC
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "noharm-vpc-resource-id"
+description = "ID de recurso de VPC hardcoded (vpc/subnet/sg/igw/rtb/acl) — deve ser Parameter"
+regex = '''\b(?:vpc|subnet|sg|igw|rtb|acl|eni|nat|vpce|dopt)-(?:[0-9a-f]{8}|[0-9a-f]{17})\b'''
+tags = ["infra", "aws", "vpc"]
