@@ -12,7 +12,7 @@ on:
       sensitive_data_blocking:
         description: "Falha o PR quando ha dado sensivel de infra ou PII (CPF/CNPJ/CNS)"
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
@@ -126,7 +126,7 @@ jobs:
       # null com false da igual nas expressoes do GitHub, entao usamos toJSON
       # para distinguir "nao informado" de "informado como false".
       SECRETS_BLOCKING: ${{ toJSON(inputs.secret_scan_blocking) == 'false' && 'false' || 'true' }}
-      SENSITIVE_BLOCKING: ${{ toJSON(inputs.sensitive_data_blocking) == 'true' && 'true' || 'false' }}
+      SENSITIVE_BLOCKING: ${{ toJSON(inputs.sensitive_data_blocking) == 'false' && 'false' || 'true' }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -207,9 +207,9 @@ jobs:
             --config ${{ steps.rules.outputs.dir }}/gitleaks.toml \
             --no-banner --redact --exit-code 1
 
-      # O gitleaks nao emite anotacoes do GitHub. Em modo aviso o job fica
-      # verde, e ninguem abre log de job verde — entao convertemos o JSON em
-      # `::warning file=,line=` para o achado aparecer na aba Files do PR.
+      # O gitleaks nao emite anotacoes do GitHub, entao convertemos o JSON em
+      # `::error file=,line=` (ou `::warning`, quando o chamador desligou o
+      # bloqueio) para o achado aparecer na aba Files do PR.
       - name: Scan for sensitive infrastructure data (gitleaks)
         id: gitleaks-infra
         continue-on-error: true
@@ -220,8 +220,9 @@ jobs:
             --no-banner --redact --exit-code 1 \
             --report-format json --report-path "$RUNNER_TEMP/infra.json"
           rc=$?
+          if [ "$SENSITIVE_BLOCKING" = "true" ]; then level=error; else level=warning; fi
           python ${{ steps.rules.outputs.dir }}/gitleaks-annotate.py \
-            "$RUNNER_TEMP/infra.json" --level warning --prefix "$PWD"
+            "$RUNNER_TEMP/infra.json" --level "$level" --prefix "$PWD"
           exit $rc
 
       - name: Scan for Brazilian PII (CPF/CNPJ/CNS)
@@ -264,7 +265,7 @@ jobs:
     name: IaC policy (cfn-guard + cfn-lint)
     runs-on: ubuntu-latest
     env:
-      SENSITIVE_BLOCKING: ${{ toJSON(inputs.sensitive_data_blocking) == 'true' && 'true' || 'false' }}
+      SENSITIVE_BLOCKING: ${{ toJSON(inputs.sensitive_data_blocking) == 'false' && 'false' || 'true' }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -364,8 +365,9 @@ jobs:
             echo "::endgroup::"
           done <<< "$TEMPLATES"
 
-      # Mesma politica do job secret-scan: dado sensivel avisa, nao bloqueia,
-      # ate os templates existentes trocarem os IDs de rede por Parameters.
+      # continue-on-error + gate no final (em vez de falhar aqui): assim todos
+      # os templates sao validados e anotados antes de o job parar, e o
+      # chamador ainda pode degradar para aviso com sensitive_data_blocking.
       - name: cfn-guard (dados sensiveis no template)
         id: iac-sensitive
         if: steps.discover.outputs.found == 'true'
@@ -382,7 +384,8 @@ jobs:
             echo "::endgroup::"
           done <<< "$TEMPLATES"
           if [ "$failed" = "1" ]; then
-            echo "::warning::Dados sensiveis hardcoded encontrados em template CloudFormation/SAM."
+            if [ "$SENSITIVE_BLOCKING" = "true" ]; then level=error; else level=warning; fi
+            echo "::${level}::Dados sensiveis hardcoded encontrados em template CloudFormation/SAM."
             exit 1
           fi
 
