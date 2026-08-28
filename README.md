@@ -47,14 +47,16 @@ jobs:
   call-shared:
     uses: noharm-ai/.github/.github/workflows/default.yml@main
     with:
-      secret_scan_blocking: true      # padrao
-      sensitive_data_blocking: false  # padrao — vire para true depois de limpar o repo
+      secret_scan_blocking: true     # padrao
+      sensitive_data_blocking: true  # padrao
 ```
 
-Segredos bloqueiam desde o primeiro dia (a varredura nos 14 repositorios
-consumidores fechou em zero achado). Infra e PII entram em modo aviso porque
-existem ocorrencias reais a limpar — principalmente `sg-`/`subnet-` e account
-IDs hardcoded em `template.yaml`.
+Ambos bloqueiam por padrao: segredos, dados sensiveis de infraestrutura
+(`sg-`/`subnet-`, account IDs) e PII (CPF/CNPJ/CNS) reprovam o PR.
+
+Um repositorio com ocorrencias antigas ainda por limpar pode passar
+`sensitive_data_blocking: false` para degradar infra e PII a aviso enquanto faz
+a limpeza — os achados continuam anotados na aba **Files**, sem reprovar o PR.
 
 ## Como silenciar um achado
 
