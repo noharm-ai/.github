@@ -76,6 +76,12 @@ tags = ["infra", "ip"]
     # resolvers publicos e exemplos canonicos de documentacao
     '''^(8\.8\.8\.8|8\.8\.4\.4|1\.1\.1\.1|1\.0\.0\.1|9\.9\.9\.9)$''',
     '''^(1\.2\.3\.4|4\.3\.2\.1|5\.6\.7\.8|123\.123\.123\.123)$''',
+    # Versao do git que vem no CentOS 7 / Oracle Linux 7. Tem a forma exata de
+    # um IPv4 e e citada em prosa ("EL7 ainda shippa 1.8.3.1") em ~70 pontos do
+    # org, longe demais do nome da ferramenta para o contexto de linha abaixo
+    # pegar. Nenhum recurso nosso vive em 1.0.0.0/8, entao o custo de nunca mais
+    # flagar esse literal e menor que o de 70 falsos positivos.
+    '''^1\.8\.3\.1$''',
   ]
 
   [[rules.allowlists]]
@@ -85,7 +91,16 @@ tags = ["infra", "ip"]
     # dados de path de SVG: d="m2.64,2.97h-.3s-.1.02-.13.05..."
     '''(?i)(<path|<svg|viewbox=|\bd="[mMlLcCzZhHvV])''',
     # numeros de versao e OIDs
-    '''(?i)(version|versao|__version__|release|changelog|semver|instantclient|v\.[0-9])''',
+    # `vers[aã]o` porque a forma acentuada e a que aparece em doc escrito em
+    # portugues -- era o caso de um falso positivo real no repo `evals`.
+    '''(?i)(version|vers[aã]o|vers[oõ]es|__version__|release|changelog|semver|instantclient|v\.[0-9])''',
+    # Versao de ferramenta com QUATRO componentes ("git 1.8.3.1") tem a forma
+    # exata de um IPv4. Exige o nome da ferramenta na mesma linha, ANTES do
+    # numero e a no maximo 40 caracteres sem digitos no meio: um IP publico
+    # real quase nunca aparece logo depois de "git"/"python"/"docker", e o caso
+    # em que apareceria (`git clone http://10.x/repo`) e IP privado, ja coberto
+    # pela allowlist de valor acima.
+    '''(?i)\b(git|python|node|npm|java|docker|podman|kernel|glibc|openssl|perl|ruby|php|gcc)\b[^0-9\n]{0,40}[0-9]+(\.[0-9]+){3}\b''',
     # versoes dentro de URLs de artefato (maven, oracle, releases)
     '''(?i)(maven|/artifact/|download\.|\.jar\b|\.zip\b|\.tar\.gz\b|ojdbc)''',
     # cabecalhos de proxy em teste usam IPs de exemplo da documentacao (MDN)
